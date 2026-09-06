@@ -21,16 +21,25 @@ func TestRestartHintFor(t *testing.T) {
 		goos    string
 		systemd bool
 		unit    bool
+		sysUnit bool
 		want    string
 		notWant []string
 	}{
-		{"macOS", "darwin", false, false, "launchctl", []string{"systemctl", "wsl"}},
+		{"macOS", "darwin", false, false, false, "launchctl", []string{"systemctl", "wsl"}},
 		// --user, because that is the unit dejima installs and the command that
 		// actually runs. Plain `systemctl restart dejimad` addresses a SYSTEM unit
 		// that does not exist, so an operator who ran what the hint said got a
 		// different failure than the one being reported to them.
-		{"linux, systemd, unit installed", "linux", true, true, "systemctl --user restart dejimad.service", []string{"launchctl"}},
-		{"linux without systemd (a container)", "linux", false, false, "dejima wsl start", []string{"launchctl"}},
+		{"linux, systemd, USER unit installed", "linux", true, true, false, "systemctl --user restart dejimad.service", []string{"launchctl"}},
+		// THE SECOND ROW THE MATRIX DID NOT HAVE, and it is the same omission one
+		// layer down. #408 replaced "does systemd run?" with "is there a unit?" —
+		// and "a unit" meant a USER unit. `dejima wsl setup` writes a SYSTEM unit
+		// at /etc/systemd/system, because the WSL daemon runs as root and starts
+		// with the distro's init. Telling that operator to run `--user` names a
+		// unit that does not exist, which is exactly how a WSL self-update
+		// installed its binary and then reported nothing to restart into.
+		{"linux, systemd, SYSTEM unit (the WSL setup shape)", "linux", true, true, true, "systemctl restart dejimad.service", []string{"launchctl", "--user"}},
+		{"linux without systemd (a container)", "linux", false, false, false, "dejima wsl start", []string{"launchctl"}},
 		// THE FIELD CASE, AND THE ONE THIS MATRIX DID NOT HAVE. A modern WSL
 		// distro RUNS systemd, so the old two-parameter version answered "yes" and
 		// told the operator to run `sudo systemctl restart dejimad` — moments
@@ -40,11 +49,11 @@ func TestRestartHintFor(t *testing.T) {
 		//
 		// The old table drove every branch it had, which is why it passed: the
 		// combination that occurs in the field was not one of them.
-		{"linux, systemd RUNNING, no dejimad unit (WSL)", "linux", true, false, "dejima wsl start", []string{"launchctl", "sudo systemctl"}},
-		{"anything else still says something", "windows", false, false, "Restart the daemon", []string{"launchctl", "systemctl"}},
+		{"linux, systemd RUNNING, no dejimad unit", "linux", true, false, false, "dejima wsl start", []string{"launchctl", "sudo systemctl"}},
+		{"anything else still says something", "windows", false, false, false, "Restart the daemon", []string{"launchctl", "systemctl"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := restartHintFor(tc.goos, tc.systemd, tc.unit)
+			got := restartHintFor(tc.goos, tc.systemd, tc.unit, tc.sysUnit)
 			if !strings.Contains(got, tc.want) {
 				t.Errorf("restartHintFor(%q, systemd=%v, unit=%v) = %q, want it to contain %q",
 					tc.goos, tc.systemd, tc.unit, got, tc.want)
@@ -66,7 +75,7 @@ func TestRestartHintFor(t *testing.T) {
 // a row that violates it; this cannot pass while any does.
 func TestNoSystemctlAdviceWithoutAUnit(t *testing.T) {
 	for _, systemd := range []bool{true, false} {
-		got := restartHintFor("linux", systemd, false)
+		got := restartHintFor("linux", systemd, false, false)
 		if strings.Contains(got, "systemctl") {
 			t.Errorf("with no dejimad unit installed (systemd=%v) the hint still names "+
 				"systemctl, which is the command that had just failed: %q", systemd, got)

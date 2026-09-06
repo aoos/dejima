@@ -163,19 +163,33 @@ func (s *Server) restartDaemon(meta selfupdate.InstallMeta) {
 // cannot work, and the daemon is started from the Windows side instead. Telling
 // someone there to run a systemctl command sends them in a circle.
 func restartFailureHint() string {
-	return restartHintFor(runtime.GOOS, hasSystemd(), service.UnitInstalled())
+	return restartHintFor(runtime.GOOS, hasSystemd(), service.UnitInstalled(), service.SystemUnit())
 }
 
 // restartHintFor is the decision, separated from the host so every branch can be
 // tested on any machine. Left inline, the no-systemd branch was only exercised
 // on a host that happened to lack systemd — so a mutation breaking hasSystemd
 // passed, because the test simply skipped the case it was meant to cover.
-func restartHintFor(goos string, systemd, unitInstalled bool) string {
+// systemUnit is a PARAMETER rather than a service.SystemUnit() call inside,
+// like its two neighbours. It was written as an internal call first, and a
+// mutation that made the hint always say --user survived every test — because
+// the one input that decided the branch was the one the test could not set.
+// A function with two injectable inputs and one global is testable-looking and
+// not testable.
+func restartHintFor(goos string, systemd, unitInstalled, systemUnit bool) string {
 	switch goos {
 	case "darwin":
 		return "Restart it with: sudo launchctl kickstart -k system/tech.dejima.dejimad"
 	case "linux":
 		if systemd && unitInstalled {
+			// Which SCOPE holds the unit decides the command, and naming the
+			// wrong one is not cosmetic: a system unit restarted with --user
+			// fails saying the unit does not exist, which is how a WSL host
+			// installed its new binary and then reported that nothing was
+			// installed to restart into.
+			if systemUnit {
+				return "Restart it with: systemctl restart dejimad.service"
+			}
 			return "Restart it with: systemctl --user restart dejimad.service"
 		}
 		// Either no systemd (a container), or systemd with NO dejimad unit —
